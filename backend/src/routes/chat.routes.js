@@ -8,5 +8,7 @@ router.post('/session', authMiddleware, roleGuard('student'), chatController.cre
 router.get('/sessions', authMiddleware, roleGuard('student'), chatController.listSessions);
 router.get('/session/:sessionId/messages', authMiddleware, roleGuard('student'), chatController.getSessionMessages);
 router.post('/message', authMiddleware, roleGuard('student'), chatController.sendMessage);
+router.post('/tts', authMiddleware, chatController.textToSpeech);
+router.post('/proxy', authMiddleware, chatController.proxyChat);
 
 module.exports = router;

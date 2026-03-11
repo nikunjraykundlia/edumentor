@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Send, Loader2 } from 'lucide-react';
+import { Send, Loader2, Mic, MicOff } from 'lucide-react';
 import { motion } from 'framer-motion';
 import type { Subject } from '@/lib/types';
 
@@ -14,7 +14,9 @@ interface ChatInputProps {
 export default function ChatInput({ onSend, disabled, subject }: ChatInputProps) {
     const [input, setInput] = useState('');
     const [isFocused, setIsFocused] = useState(false);
+    const [isRecording, setIsRecording] = useState(false);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const recognitionRef = useRef<any>(null);
 
     // Auto-resize textarea
     useEffect(() => {
@@ -41,6 +43,39 @@ export default function ChatInput({ onSend, disabled, subject }: ChatInputProps)
             e.preventDefault();
             handleSubmit();
         }
+    };
+
+    const toggleRecording = () => {
+        if (isRecording) {
+            recognitionRef.current?.stop();
+            setIsRecording(false);
+            return;
+        }
+
+        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            alert('Speech Recognition is not supported in this browser.');
+            return;
+        }
+
+        const recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+
+        recognition.onstart = () => setIsRecording(true);
+        recognition.onend = () => setIsRecording(false);
+        recognition.onerror = (event: any) => {
+            console.error('Speech recognition error:', event.error);
+            setIsRecording(false);
+        };
+        recognition.onresult = (event: any) => {
+            const transcript = event.results[0][0].transcript;
+            setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
+        };
+
+        recognitionRef.current = recognition;
+        recognition.start();
     };
 
     return (
@@ -119,29 +154,55 @@ export default function ChatInput({ onSend, disabled, subject }: ChatInputProps)
                         rows={1}
                     />
 
-                    <button
-                        type="submit"
-                        disabled={!input.trim() || disabled}
-                        style={{
-                            background: input.trim() && !disabled
-                                ? 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))'
-                                : 'rgba(255,255,255,0.05)',
-                            border: 'none',
-                            width: '40px',
-                            height: '40px',
-                            borderRadius: '50%',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            cursor: input.trim() && !disabled ? 'pointer' : 'not-allowed',
-                            color: input.trim() && !disabled ? 'white' : 'var(--text-muted)',
-                            transition: 'all 0.3s ease',
-                            flexShrink: 0,
-                            marginBottom: '4px',
-                        }}
-                    >
-                        {disabled ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} style={{ marginLeft: '2px' }} />}
-                    </button>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '4px' }}>
+                        <button
+                            type="button"
+                            onClick={toggleRecording}
+                            disabled={disabled}
+                            style={{
+                                background: isRecording ? 'rgba(239, 68, 68, 0.15)' : 'rgba(255,255,255,0.05)',
+                                border: isRecording ? '1px solid rgba(239, 68, 68, 0.3)' : 'none',
+                                width: '40px',
+                                height: '40px',
+                                borderRadius: '50%',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                cursor: 'pointer',
+                                color: isRecording ? '#ef4444' : 'var(--text-muted)',
+                                transition: 'all 0.3s ease',
+                                flexShrink: 0,
+                            }}
+                            title={isRecording ? 'Stop recording' : 'Voice input'}
+                        >
+                            <div style={{ margin: '0 auto' }}>
+                                {isRecording ? <MicOff size={18} /> : <Mic size={18} />}
+                            </div>
+                        </button>
+
+                        <button
+                            type="submit"
+                            disabled={!input.trim() || disabled}
+                            style={{
+                                background: input.trim() && !disabled
+                                    ? 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))'
+                                    : 'rgba(255,255,255,0.05)',
+                                border: 'none',
+                                width: '40px',
+                                height: '40px',
+                                borderRadius: '50%',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                cursor: input.trim() && !disabled ? 'pointer' : 'not-allowed',
+                                color: input.trim() && !disabled ? 'white' : 'var(--text-muted)',
+                                transition: 'all 0.3s ease',
+                                flexShrink: 0,
+                            }}
+                        >
+                            {disabled ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} style={{ marginLeft: '2px' }} />}
+                        </button>
+                    </div>
                 </motion.form>
             </div>
         </div>

@@ -2,25 +2,15 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { motion, AnimatePresence } from "framer-motion";
-
-import {
-    User as FirebaseUser,
-    onAuthStateChanged,
-    signOut as firebaseSignOut,
-    GoogleAuthProvider,
-    signInWithPopup,
-    signInWithEmailAndPassword,
-    createUserWithEmailAndPassword,
-    updateProfile,
-} from "firebase/auth";
-import { auth } from "@/lib/firebase";
+import { motion } from "framer-motion";
+import api from "@/lib/api";
+import { useAuthStore } from "@/store/authStore";
+import type { User as ApiUser, AuthResponse } from "@/lib/types";
 
 export interface User {
     id: string;
     email: string;
     displayName: string;
-    isFirebase?: boolean;
 }
 
 interface AuthContextType {
@@ -28,7 +18,7 @@ interface AuthContextType {
     loading: boolean;
     signIn: (email: string, password: string) => Promise<void>;
     signUp: (email: string, password: string, displayName: string) => Promise<void>;
-    signInWithGoogle: () => Promise<void>; // Mock or remove Google sign-in
+    signInWithGoogle: () => Promise<void>;
     signOut: () => Promise<void>;
     error: string | null;
     clearError: () => void;
@@ -45,25 +35,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [error, setError] = useState<string | null>(null);
     const router = useRouter();
     const pathname = usePathname();
+    const { user: storeUser, isLoading, loadFromStorage, setAuth, logout: storeLogout } = useAuthStore();
 
-    // Check authentication (Firebase only now)
+    // Load JWT auth state from localStorage on mount
     useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, (fbUser: FirebaseUser | null) => {
-            if (fbUser) {
-                setUser({
-                    id: fbUser.uid,
-                    email: fbUser.email || "",
-                    displayName: fbUser.displayName || "",
-                    isFirebase: true
-                });
+        loadFromStorage();
+    }, [loadFromStorage]);
+
+    // Sync local user state with store
+    useEffect(() => {
+        if (!isLoading) {
+            if (storeUser) {
+                const mapped: User = {
+                    id: (storeUser as any)._id || (storeUser as any).id,
+                    email: (storeUser as any).email,
+                    displayName: (storeUser as any).name || (storeUser as any).email?.split("@")[0] || "",
+                };
+                setUser(mapped);
             } else {
                 setUser(null);
             }
             setLoading(false);
-        });
-
-        return () => unsubscribe();
-    }, []);
+        }
+    }, [storeUser, isLoading]);
 
     // Route protection: redirect unauthenticated users away from protected routes
     useEffect(() => {
@@ -80,13 +74,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const clearError = () => setError(null);
 
+    const handleAuthSuccess = (apiUser: ApiUser, accessToken: string, redirectTo: string) => {
+        setAuth(apiUser as any, accessToken);
+        setUser({
+            id: apiUser._id,
+            email: apiUser.email,
+            displayName: apiUser.name,
+        });
+        router.push(redirectTo);
+    };
+
     const signIn = async (email: string, password: string) => {
         try {
             setError(null);
-            await signInWithEmailAndPassword(auth, email, password);
-            router.push("/dashboard");
+            const { data } = await api.post<AuthResponse>("/auth/login", { email, password });
+            handleAuthSuccess(data.user as ApiUser, data.accessToken, "/dashboard");
         } catch (err: any) {
-            setError(err.message || "Failed to sign in");
+            const message = err?.response?.data?.message || err.message || "Failed to sign in";
+            setError(message);
             throw err;
         }
     };
@@ -94,18 +99,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const signUp = async (email: string, password: string, displayName: string) => {
         try {
             setError(null);
-            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-
-            // Set the display name for the new user
-            if (userCredential.user) {
-                await updateProfile(userCredential.user, {
-                    displayName: displayName
-                });
-            }
-
-            router.push("/dashboard");
+            const { data } = await api.post<AuthResponse>("/auth/register", {
+                name: displayName,
+                email,
+                password,
+                role: "student",
+            });
+            handleAuthSuccess(data.user as ApiUser, data.accessToken, "/dashboard");
         } catch (err: any) {
-            setError(err.message || "Failed to sign up");
+            const message = err?.response?.data?.message || err.message || "Failed to sign up";
+            setError(message);
             throw err;
         }
     };
@@ -113,7 +116,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const signOut = async () => {
         try {
             setError(null);
-            await firebaseSignOut(auth);
+            try {
+                await api.post("/auth/logout");
+            } catch {
+                // ignore backend logout failure
+            }
+            storeLogout();
             setUser(null);
             router.push("/login");
         } catch (err: any) {
@@ -122,22 +130,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     const signInWithGoogle = async () => {
-        try {
-            setError(null);
-            const provider = new GoogleAuthProvider();
-            const result = await signInWithPopup(auth, provider);
-            const fbUser = result.user;
-            setUser({
-                id: fbUser.uid,
-                email: fbUser.email || "",
-                displayName: fbUser.displayName || "",
-                isFirebase: true
-            });
-            router.push("/dashboard");
-        } catch (err: any) {
-            setError(err.message || "Google sign in failed");
-            throw err;
-        }
+        setError("Google sign-in is disabled in this JWT-only setup.");
+        return Promise.reject(new Error("Google sign-in is disabled"));
     };
 
     return (
@@ -146,7 +140,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         >
             {loading ? (
                 <div className="min-h-screen flex flex-col items-center justify-center bg-background relative overflow-hidden">
-                    {/* Animated background elements for premium feel */}
                     <div className="absolute top-1/4 -left-20 w-80 h-80 bg-indigo-500/10 rounded-full blur-[100px] animate-pulse" />
                     <div className="absolute bottom-1/4 -right-20 w-80 h-80 bg-cyan-500/10 rounded-full blur-[100px] animate-pulse" />
 

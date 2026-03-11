@@ -16,7 +16,8 @@ async function triggerUploadWebhook({ fileUrl, sessionId, subjectId }) {
  * Trigger n8n chat feature webhook.
  */
 async function triggerChatWebhook({ chatInput, subject, sessionId }) {
-    const response = await axios.post(process.env.N8N_CHAT_WEBHOOK, {
+    const CHAT_WEBHOOK_URL = 'https://nikunjn8n.up.railway.app/webhook/chatfeature';
+    const response = await axios.post(CHAT_WEBHOOK_URL, {
         chatInput,
         subject,
         sessionId,

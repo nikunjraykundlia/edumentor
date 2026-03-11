@@ -1,0 +1,4 @@
+speechrecognition
+elevenlabs
+python-dotenv
+pyaudio

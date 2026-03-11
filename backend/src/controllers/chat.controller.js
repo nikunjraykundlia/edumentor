@@ -3,6 +3,7 @@ const ChatMessage = require('../models/ChatMessage');
 const Subject = require('../models/Subject');
 const { generateSessionId } = require('../utils/sessionIdGenerator');
 const { triggerChatWebhook } = require('../services/n8n.service');
+const axios = require('axios');
 
 // ── Create or Get Chat Session ──
 exports.createOrGetSession = async (req, res, next) => {
@@ -121,56 +122,41 @@ exports.sendMessage = async (req, res, next) => {
                 sessionId: session.sessionId,
             });
 
-            console.log('n8n raw response:', JSON.stringify(n8nResponse, null, 2));
+            console.log('n8n raw response:', JSON.stringify(n8nResponse));
 
-            // n8n returns structured JSON, often wrapped in an array by axios if n8n returns [ { ... } ]
+            // n8n returns structured JSON, often wrapped in an array by axios
             let actualResponse = n8nResponse;
             if (Array.isArray(n8nResponse) && n8nResponse.length > 0) {
-                // Take the first element. If it has 'output', use that.
-                // Otherwise use the whole first element.
-                actualResponse = n8nResponse[0].output !== undefined ? n8nResponse[0].output : n8nResponse[0];
+                actualResponse = n8nResponse[0].json || n8nResponse[0].output || n8nResponse[0].data || n8nResponse[0];
+            } else if (n8nResponse && typeof n8nResponse === 'object') {
+                actualResponse = n8nResponse.json || n8nResponse.output || n8nResponse.data || n8nResponse;
             }
 
-            // structuredResponse will be sent to frontend for special rendering
-            structuredResponse = typeof actualResponse === 'object' ? actualResponse : null;
-
-            // check if actualResponse has the expected structure
-            if (actualResponse && actualResponse.answer && Array.isArray(actualResponse.answer)) {
+            // Standardize structured response
+            if (actualResponse && Array.isArray(actualResponse.answer)) {
+                // n8n format: { answer: [ { answerfromnotes: "...", ... } ] }
                 structuredResponse = {
                     answer: actualResponse.answer,
                     metadata: actualResponse.metadata || {},
                 };
                 assistantContent = actualResponse.answer
-                    .map((a) => a.answerfromnotes)
+                    .map((a) => a.answerfromnotes || a.content || a.text || '')
+                    .filter(Boolean)
                     .join('\n');
-            } else if (actualResponse && actualResponse.mcqs) {
-                structuredResponse = {
-                    mcqs: actualResponse.mcqs,
-                    metadata: actualResponse.metadata || {},
-                };
-                assistantContent = 'I have generated the MCQs based on your notes. You can see them below.';
-            } else if (actualResponse && actualResponse.document) {
-                structuredResponse = {
-                    document: actualResponse.document,
-                    metadata: actualResponse.metadata || {},
-                };
-                assistantContent = 'I have generated the document for you. You can find it below.';
-            } else if (typeof actualResponse === 'string' && actualResponse.trim() !== '') {
+            } else if (actualResponse && typeof actualResponse === 'object' && actualResponse.output) {
+                // Possible format: { output: "..." }
+                assistantContent = actualResponse.output;
+                structuredResponse = actualResponse;
+            } else if (actualResponse && typeof actualResponse === 'object' && actualResponse.content) {
+                // Possible format: { content: "..." }
+                assistantContent = actualResponse.content;
+                structuredResponse = actualResponse;
+            } else if (typeof actualResponse === 'string') {
                 assistantContent = actualResponse;
-            } else if (actualResponse && typeof actualResponse === 'object') {
-                // Try to find a message/text field in the object
-                assistantContent = actualResponse.text ||
-                    actualResponse.message ||
-                    actualResponse.response ||
-                    actualResponse.output ||
-                    (Object.keys(actualResponse).length > 0 ? JSON.stringify(actualResponse) : '');
             } else {
-                assistantContent = '';
-            }
-
-            // Ensure assistantContent is not empty
-            if (!assistantContent || assistantContent.trim() === '') {
-                assistantContent = 'I processed your request but received an empty response. Please try rephrasing your question.';
+                // Fallback: If it's an object but we don't recognize the fields, use the whole thing
+                assistantContent = typeof actualResponse === 'object' ? JSON.stringify(actualResponse) : String(actualResponse);
+                structuredResponse = actualResponse;
             }
         } catch (err) {
             console.error('n8n chat webhook error:', err.message);
@@ -197,5 +183,90 @@ exports.sendMessage = async (req, res, next) => {
         });
     } catch (error) {
         next(error);
+    }
+};
+
+// ── Proxy Chat (Directly to n8n) ──
+exports.proxyChat = async (req, res, next) => {
+    try {
+        const { chatInput, subject, sessionId } = req.body;
+
+        if (!chatInput) {
+            return res.status(400).json({
+                success: false,
+                message: 'chatInput is required.',
+            });
+        }
+
+        const n8nResponse = await triggerChatWebhook({
+            chatInput,
+            subject: subject || 'General',
+            sessionId: sessionId || 'anonymous',
+        });
+
+        res.json({ success: true, data: n8nResponse });
+    } catch (error) {
+        console.error('Proxy chat error:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to communicate with AI service.',
+        });
+    }
+};
+
+// ── Text to Speech (ElevenLabs Proxy) ──
+exports.textToSpeech = async (req, res, next) => {
+    try {
+        const { text, voiceId = '21m00Tcm4TlvDq8ikWAM' } = req.body;
+        console.log(`[TTS] Request received for text length: ${text?.length}, voiceId: ${voiceId}`);
+
+        if (!text) {
+            return res.status(400).json({ success: false, message: 'Text is required.' });
+        }
+
+        const response = await axios({
+            method: 'post',
+            url: `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
+            data: {
+                text,
+                model_id: 'eleven_multilingual_v2',
+                voice_settings: {
+                    stability: 0.5,
+                    similarity_boost: 0.8,
+                    style: 0.0,
+                    use_speaker_boost: true,
+                },
+            },
+            headers: {
+                'xi-api-key': process.env.ELEVENLABS_API_KEY,
+                'Content-Type': 'application/json',
+                accept: 'audio/mpeg',
+            },
+            responseType: 'stream',
+        });
+
+        res.set({
+            'Content-Type': 'audio/mpeg',
+            'Transfer-Encoding': 'chunked',
+        });
+
+        response.data.pipe(res);
+    } catch (error) {
+        // If the error response is a stream, we need to handle it differently
+        if (error.response && error.response.data && typeof error.response.data.on === 'function') {
+            let errorData = '';
+            error.response.data.on('data', chunk => { errorData += chunk; });
+            error.response.data.on('end', () => {
+                console.error('TTS API error details:', errorData);
+            });
+        } else {
+            console.error('TTS Error:', error.message);
+        }
+
+        res.status(500).json({
+            success: false,
+            message: 'Failed to generate speech. Please check API quota or model availability.',
+            error: error.message,
+        });
     }
 };

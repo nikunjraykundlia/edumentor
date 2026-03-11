@@ -1,7 +1,8 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { Bot, User } from 'lucide-react';
+import { Bot, User, BookOpen, Volume2, VolumeX, Loader2 } from 'lucide-react';
+import { useState, useRef } from 'react';
 import type { ChatMessage, StructuredAnswer } from '@/lib/types';
 import ConfidenceBadge from '../ui/ConfidenceBadge';
 import CitationAccordion from './CitationAccordion';
@@ -12,6 +13,74 @@ interface MessageBubbleProps {
 
 export default function MessageBubble({ message }: MessageBubbleProps) {
     const isUser = message.role === 'user';
+    const [isPlaying, setIsPlaying] = useState(false);
+    const audioRef = useRef<HTMLAudioElement | null>(null);
+
+    // Compute a primary text for assistant messages so we never render an empty bubble.
+    let assistantText = '';
+    if (!isUser) {
+        const structured = message.structuredResponse;
+        
+        // 1. Try to extract from structured answer array - Join all if there are multiple
+        const joinedAnswers =
+            structured?.answer && Array.isArray(structured.answer)
+                ? structured.answer.map((a: any) => a.answerfromnotes || a.content || a.text || '').filter(Boolean).join(' ')
+                : '';
+        
+        // 2. Try to extract from common top-level fields
+        const outputField = structured?.output || structured?.content || structured?.text || '';
+        
+        // 3. Document text or MCQs
+        const docText = structured?.document?.content || '';
+        const mcqText = structured?.mcqs && Array.isArray(structured.mcqs) 
+            ? structured.mcqs.map((m: any, i: number) => `${i+1}. ${m.question}`).join(' ') 
+            : '';
+            
+        const rawContent = message.content || '';
+
+        // Prioritize rawContent if it exists as it's often the pre-formatted full text from the backend
+        assistantText = (rawContent || joinedAnswers || outputField || docText || mcqText || '').toString().trim();
+        
+        // Final Fallback: Stringify if object
+        if (!assistantText && structured && typeof structured === 'object') {
+            assistantText = JSON.stringify(structured);
+        }
+    }
+
+    const handlePlayAudio = async () => {
+        if (isPlaying) {
+            audioRef.current?.pause();
+            setIsPlaying(false);
+            return;
+        }
+
+        try {
+            setIsPlaying(true);
+            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/chat/tts`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+                },
+                body: JSON.stringify({ text: assistantText })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.message || 'Failed to fetch audio from server');
+            }
+
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+            audioRef.current = audio;
+            audio.onended = () => setIsPlaying(false);
+            audio.play();
+        } catch (error) {
+            console.error('Error playing audio:', error);
+            setIsPlaying(false);
+        }
+    };
 
     return (
         <motion.div
@@ -149,18 +218,48 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                                     </a>
                                 )}
                             </div>
-                        ) : message.content ? (
-                            <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{message.content}</p>
+                        ) : assistantText ? (
+                            <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{assistantText}</p>
                         ) : (
-                            <div style={{ display: 'flex', gap: '4px' }}>
-                                {[0, 1, 2].map(i => (
-                                    <motion.div
-                                        key={i}
-                                        animate={{ opacity: [0.4, 1, 0.4] }}
-                                        transition={{ repeat: Infinity, duration: 1, delay: i * 0.2 }}
-                                        style={{ width: '4px', height: '4px', borderRadius: '50%', background: 'var(--text-muted)' }}
-                                    />
-                                ))}
+                            <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>
+                                No answer received from AI. Please try asking again.
+                            </p>
+                        )}
+
+                        {!isUser && assistantText && (
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '12px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '8px' }}>
+                                <button
+                                    onClick={handlePlayAudio}
+                                    style={{
+                                        background: isPlaying ? 'rgba(99,102,241,0.1)' : 'transparent',
+                                        border: 'none',
+                                        color: isPlaying ? 'var(--accent-primary)' : 'var(--text-muted)',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '6px',
+                                        fontSize: '12px',
+                                        padding: '4px 8px',
+                                        borderRadius: '6px',
+                                        transition: 'all 0.2s ease',
+                                    }}
+                                >
+                                    {isPlaying ? (
+                                        <>
+                                            <div className="flex gap-1 items-center">
+                                                <span className="w-1 h-3 bg-indigo-500 animate-pulse" />
+                                                <span className="w-1 h-4 bg-indigo-500 animate-pulse delay-75" />
+                                                <span className="w-1 h-2 bg-indigo-500 animate-pulse delay-150" />
+                                            </div>
+                                            <span>Stop</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Volume2 size={14} />
+                                            <span>Listen</span>
+                                        </>
+                                    )}
+                                </button>
                             </div>
                         )}
                     </div>

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useSubjects } from "@/components/providers/SubjectsProvider";
-import { MCQ, ShortAnswer } from "@/lib/types";
+import { MCQ, ShortAnswer, Subject } from "@/lib/types";
 import { PageTransition } from "@/components/shared/PageTransition";
 import { StudyTabs } from "@/components/study/StudyTabs";
 import { MCQCard } from "@/components/study/MCQCard";
@@ -18,9 +18,16 @@ export default function HistoryPage() {
     const [shortAnswers, setShortAnswers] = useState<ShortAnswer[]>([]);
 
     const { subjects, activeSubjectId } = useSubjects();
+    const typedSubjects = subjects as unknown as (Subject & { id?: string })[];
     const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(null);
-    const effectiveSubjectId = selectedSubjectId || activeSubjectId || subjects[0]?.id || null;
-    const subject = subjects.find((s) => s.id === effectiveSubjectId) || subjects[0] || null;
+    const effectiveSubjectId =
+        selectedSubjectId ||
+        activeSubjectId ||
+        (typedSubjects[0] ? typedSubjects[0].id ?? typedSubjects[0]._id : null);
+    const subject =
+        typedSubjects.find((s) => (s.id ?? s._id) === effectiveSubjectId) ||
+        typedSubjects[0] ||
+        null;
 
     useEffect(() => {
         if (effectiveSubjectId) {

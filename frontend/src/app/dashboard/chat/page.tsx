@@ -7,11 +7,18 @@ import { Send, Bot, User, Loader2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-// Add these imports at the top
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import "highlight.js/styles/github-dark.css"; // or any theme you prefer
+import "highlight.js/styles/github-dark.css";
+import type { Subject } from "@/lib/types";
+import api from "@/lib/api";
+
+
+type SubjectWithFiles = Subject & {
+    id?: string;
+    files?: { id: string; name: string; size: string; pages: number; uploaded_at: string }[];
+};
 
 interface ChatMessage {
     id: string;
@@ -22,23 +29,20 @@ interface ChatMessage {
         confidence?: string;
         evidence?: string;
     };
-}
+};
 
 export default function ChatPage() {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [input, setInput] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
-    const [sessionId, setSessionId] = useState("");
+    const [sessionId, setSessionId] = useState<string | null>(null);
     const { subjects, activeSubjectId } = useSubjects();
+    const typedSubjects = subjects as unknown as SubjectWithFiles[];
 
-    const activeSubject = subjects.find(s => s.id === activeSubjectId);
-    const hasFiles = activeSubject && activeSubject.files && activeSubject.files.length > 0;
+    const activeSubject = typedSubjects.find((s) => (s.id ?? s._id) === activeSubjectId);
+    const hasFiles = !!(activeSubject && activeSubject.files && activeSubject.files.length > 0);
     const isInputDisabled = !hasFiles || isLoading;
-
-    useEffect(() => {
-        setSessionId(crypto.randomUUID());
-    }, []);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -58,71 +62,94 @@ export default function ChatPage() {
         setIsLoading(true);
 
         try {
-            const res = await fetch("https://nikunjn8n.up.railway.app/webhook/chat", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    sessionId: sessionId,
-                    question: userMessage.content,
-                    subject: activeSubject?.name,
-                    subjectId: activeSubject?.id,
-                }),
-            });
-
-            if (!res.ok) {
-                throw new Error("Failed to get response");
+            // Create a session id on the client if it does not exist yet.
+            let currentSessionId = sessionId;
+            if (!currentSessionId) {
+                currentSessionId = crypto.randomUUID();
+                setSessionId(currentSessionId);
             }
 
-            const textResponse = await res.text();
-            let finalContent = textResponse;
-            let parsedData: ChatMessage["parsed"] = undefined;
+            const payload = {
+                chatInput: userMessage.content,
+                subject: activeSubject?.name ?? "General",
+                sessionId: currentSessionId,
+            };
 
-            try {
-                // Remove potential markdown blocks n8n might wrap JSON in
-                const cleanText = textResponse.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-                const jsonResponse = JSON.parse(cleanText);
+            const { data: proxyResponse } = await api.post("/chat/proxy", payload);
 
-                if (typeof jsonResponse === 'object' && jsonResponse !== null) {
-                    let ansArray = [];
-                    if (Array.isArray(jsonResponse)) {
-                        ansArray = jsonResponse;
-                    } else if (Array.isArray(jsonResponse.answer)) {
-                        ansArray = jsonResponse.answer;
-                    } else if (Array.isArray(jsonResponse.output)) {
-                        ansArray = jsonResponse.output;
-                    } else if (jsonResponse.output && Array.isArray(jsonResponse.output.answer)) {
-                        ansArray = jsonResponse.output.answer;
-                    }
+            if (!proxyResponse.success) {
+                throw new Error("Backend proxy error");
+            }
 
-                    if (ansArray.length > 0 && ansArray[0].answerfromnotes) {
-                        const firstAns = ansArray[0];
+            const rawData = proxyResponse.data;
+
+            // Normalise possible n8n response shapes into a single object
+            // we can safely read from.
+            let data: any = rawData;
+
+            // If n8n returned an array (e.g. [{ json: {...} }]), use the first item.
+            if (Array.isArray(data) && data.length > 0) {
+                data = data[0];
+            }
+
+            // If wrapped in a "json" or "data" property, unwrap it.
+            if (data && typeof data === "object") {
+                if (data.json && typeof data.json === "object") {
+                    data = data.json;
+                } else if (data.data && typeof data.data === "object") {
+                    data = data.data;
+                }
+            }
+
+            console.debug("n8n webhook response (normalised):", data);
+
+            // Map n8n structured JSON into the lightweight
+            // shape this dashboard chat UI expects.
+            let parsedData: ChatMessage["parsed"] | undefined = undefined;
+            let finalContent: string = "";
+
+            if (data && Array.isArray(data.answer)) {
+                const answers = data.answer;
+                if (answers.length > 0) {
+                    const first = answers[0];
+                    const answerText =
+                        typeof first?.answerfromnotes === "string"
+                            ? first.answerfromnotes
+                            : "";
+
+                    if (answerText.trim().length > 0) {
                         parsedData = {
-                            answer: firstAns.answerfromnotes,
-                            confidence: firstAns.confidence,
-                            evidence: firstAns.citation?.evidence
+                            answer: answerText,
+                            confidence: first?.confidence,
+                            evidence: first?.citation?.evidence,
                         };
-                        finalContent = firstAns.answerfromnotes; // fallback content
-                    } else if (jsonResponse.output) {
-                        finalContent = typeof jsonResponse.output === 'string' ? jsonResponse.output : JSON.stringify(jsonResponse.output, null, 2);
-                    } else if (jsonResponse.text) {
-                        finalContent = typeof jsonResponse.text === 'string' ? jsonResponse.text : JSON.stringify(jsonResponse.text, null, 2);
-                    } else {
-                        finalContent = JSON.stringify(jsonResponse, null, 2);
+                        finalContent = answerText;
                     }
                 }
-            } catch (e) {
-                // Keep as raw text
-                console.warn("Failed to parse AI JSON response", e);
+            } else if (data && typeof data === "object") {
+                // As a fallback, if the structure is different but still an object,
+                // render the whole payload so the user is never shown an empty bubble.
+                try {
+                    const jsonText = JSON.stringify(data, null, 2);
+                    if (jsonText.trim().length > 0) {
+                        finalContent = jsonText;
+                    }
+                } catch {
+                    // ignore JSON stringify errors
+                }
+            }
+
+            if (!finalContent || finalContent.trim().length === 0) {
+                finalContent = "Sorry, I couldn't process the response. Please try again.";
             }
 
             const assistantMessage: ChatMessage = {
                 id: crypto.randomUUID(),
                 role: "assistant",
                 content: finalContent,
-                parsed: parsedData
+                parsed: parsedData,
             };
+
             setMessages((prev) => [...prev, assistantMessage]);
         } catch (error) {
             console.error(error);
@@ -207,7 +234,9 @@ export default function ChatPage() {
                                                 remarkPlugins={[remarkGfm]}
                                                 rehypePlugins={[rehypeHighlight]}
                                             >
-                                                {message.parsed ? message.parsed.answer : message.content}
+                                                {message.parsed && message.parsed.answer?.trim().length
+                                                    ? message.parsed.answer
+                                                    : message.content}
                                             </ReactMarkdown>
                                         </div>
                                         {message.role === "assistant" && message.parsed?.evidence && (

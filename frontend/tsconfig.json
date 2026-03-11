@@ -1,15 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2017",
-<<<<<<< HEAD
     "lib": ["dom", "dom.iterable", "esnext"],
-=======
-    "lib": [
-      "dom",
-      "dom.iterable",
-      "esnext"
-    ],
->>>>>>> 40c3b1e1262813eee8f664573faff647d1422ef3
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
@@ -27,18 +19,11 @@
       }
     ],
     "paths": {
-<<<<<<< HEAD
       "@/*": ["./src/*"]
-=======
-      "@/*": [
-        "./src/*"
-      ]
->>>>>>> 40c3b1e1262813eee8f664573faff647d1422ef3
     }
   },
   "include": [
     "next-env.d.ts",
-<<<<<<< HEAD
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts",
@@ -47,16 +32,3 @@
   ],
   "exclude": ["node_modules"]
 }
-=======
-    "src/**/*.ts",
-    "src/**/*.tsx",
-    ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts",
-    "src/**/*.mts"
-  ],
-  "exclude": [
-    "node_modules",
-    "hackathon-frontend"
-  ]
-}
->>>>>>> 40c3b1e1262813eee8f664573faff647d1422ef3

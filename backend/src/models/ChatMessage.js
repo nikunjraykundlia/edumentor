@@ -24,14 +24,12 @@ const answerItemSchema = new mongoose.Schema(
 const structuredResponseSchema = new mongoose.Schema(
     {
         answer: { type: [answerItemSchema], default: [] },
-        mcqs: { type: mongoose.Schema.Types.Mixed, default: null },
-        document: { type: mongoose.Schema.Types.Mixed, default: null },
         metadata: {
             notesChunksUsed: { type: String, default: '' },
             generatedAt: { type: String, default: '' },
         },
     },
-    { _id: false, strict: false }
+    { _id: false }
 );
 
 const chatMessageSchema = new mongoose.Schema(
